@@ -1,0 +1,63 @@
+name: SafeBase CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. Vérification du backend Node.js
+  check-server-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: './server/package-lock.json'
+
+      - name: Install dependencies & Lint/Test
+        run: |
+          cd server
+          npm ci
+          npm run test --if-present
+
+  # 2. Vérification du worker Go
+  check-worker-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+
+      - name: Build & Test Worker Go
+        run: |
+          cd worker-go
+          go vet ./...
+          go test ./... --if-present
+
+  # 3. Vérification du frontend React
+  check-client-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: './client/package-lock.json'
+
+      - name: Install dependencies & Build React
+        run: |
+          cd client
+          npm ci
+          npm run build --if-present
