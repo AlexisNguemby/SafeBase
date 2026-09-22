@@ -1,0 +1,81 @@
+services:
+  # Base de données PostgreSQL pour l'application SafeBase
+  postgres:
+    image: postgres:15-alpine
+    container_name: safebase-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-safebase_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-safebase_password}
+      POSTGRES_DB: ${POSTGRES_DB:-safebase_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-safebase_user} -d ${POSTGRES_DB:-safebase_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend Principal Node.js / Express / TypeScript
+  server-node:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: safebase-node-server
+    restart: always
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-safebase_user}:${POSTGRES_PASSWORD:-safebase_password}@postgres:5432/${POSTGRES_DB:-safebase_db}?schema=public
+      GO_WORKER_URL: http://worker-go:8080
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_me}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+
+  # Microservice Engine / Worker en Go (Gère les backups, restaurations & dumps)
+  worker-go:
+    build:
+      context: ./worker-go
+      dockerfile: Dockerfile
+    container_name: safebase-go-worker
+    restart: always
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgresql://${POSTGRES_USER:-safebase_user}:${POSTGRES_PASSWORD:-safebase_password}@postgres:5432/${POSTGRES_DB:-safebase_db}?schema=public
+      STORAGE_PATH: /app/backups
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./worker-go:/app
+      - backup_storage:/app/backups
+
+  # Frontend React + Vite
+  client-web:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: safebase-web-client
+    restart: always
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:3000
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+    driver: local
+  backup_storage:
+    driver: local
