@@ -1,5 +1,5 @@
 services:
-  # Base de données PostgreSQL pour l'application SafeBase
+  # Base de données PostgreSQL principale pour l'application SafeBase
   postgres:
     image: postgres:15-alpine
     container_name: safebase-postgres
@@ -14,6 +14,25 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-safebase_user} -d ${POSTGRES_DB:-safebase_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Deuxième BDD PostgreSQL pour simuler un client / environnement externe
+  postgres-client:
+    image: postgres:15-alpine
+    container_name: safebase-postgres-client
+    restart: always
+    environment:
+      POSTGRES_USER: client_user
+      POSTGRES_PASSWORD: client_password
+      POSTGRES_DB: client_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_client_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U client_user -d client_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -35,11 +54,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-client:
+        condition: service_healthy
     volumes:
       - ./server:/app
       - /app/node_modules
 
-  # Microservice Engine / Worker en Go (Gère les backups, restaurations & dumps)
+  # Microservice Engine / Worker en Go
   worker-go:
     build:
       context: ./worker-go
@@ -55,9 +76,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-client:
+        condition: service_healthy
     volumes:
       - ./worker-go:/app
-      - backup_storage:/app/backups
+      - ./worker-go/backups:/app/backups
 
   # Frontend React + Vite
   client-web:
@@ -77,5 +100,5 @@ services:
 volumes:
   postgres_data:
     driver: local
-  backup_storage:
+  postgres_client_data:
     driver: local
