@@ -1,27 +1,16 @@
-# SafeBase - Configuration Docker Initial
+# 1. Récupérer le projet
+git clone https://github.com/AlexisNguemby/SafeBase.git
+cd SafeBase
 
-Ce projet contient l'environnement Docker complet pour **SafeBase**.
+# 2. Créer le fichier d'environnement local
+# (Copier le modèle d'environnement ou créer un fichier .env avec les variables de BDD)
+cp .env.example .env   # Ou créer un .env manuellement
 
-## 🚀 Démarrage Rapide
+# 3. Lancer les conteneurs Docker (PostgreSQL + Node)
+docker-compose up -d --build
 
-1. Copier le fichier d'environnement d'exemple :
-   ```bash
-   cp .env.example .env
-   ```
+# 4. Appliquer les migrations de la base de données
+docker-compose exec server-node npx prisma migrate dev
 
-2. Lancer l'ensemble des services :
-   ```bash
-   docker-compose up -d --build
-   ```
-
-3. Vérifier que les conteneurs fonctionnent :
-   ```bash
-   docker-compose ps
-   ```
-
-## 📍 Accès aux Services
-
-* **Frontend React (Vite)** : http://localhost:5173
-* **Backend Node.js (Express)** : http://localhost:3000
-* **Worker Go Engine** : http://localhost:8080/health
-* **PostgreSQL** : `localhost:5432`
+# 5. (Optionnel) Générer le client Prisma si besoin
+docker-compose exec server-node npx prisma generate
