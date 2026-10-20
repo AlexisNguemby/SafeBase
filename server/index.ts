@@ -3,6 +3,7 @@ import cors from 'cors';
 import axios from 'axios';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
+import jwt from 'jsonwebtoken';
 
 const app = express();
 const prisma = new PrismaClient();
@@ -27,11 +28,14 @@ const authenticateToken = async (req: AuthRequest, res: Response, next: NextFunc
     return res.status(401).json({ error: 'Accès refusé. Jeton d’authentification manquant.' });
   }
 
-  const extractedEmail = token.replace('fake-jwt-token-for-', '');
-
   try {
+    const decoded = jwt.verify(
+      token, 
+      process.env.JWT_SECRET || 'super_secret_jwt_key_change_me'
+    ) as { email: string };
+
     const user = await prisma.user.findUnique({
-      where: { email: extractedEmail },
+      where: { email: decoded.email },
     });
 
     if (!user) {
@@ -42,7 +46,7 @@ const authenticateToken = async (req: AuthRequest, res: Response, next: NextFunc
     req.userEmail = user.email;
     next();
   } catch (error) {
-    return res.status(500).json({ error: 'Erreur lors de la vérification de l’authentification.' });
+    return res.status(403).json({ error: 'Jeton d’authentification invalide.' });
   }
 };
 
@@ -96,7 +100,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email ou mot de passe incorrect.' });
     }
 
-    return res.json({ token: `fake-jwt-token-for-${user.email}` });
+    return res.json({ token: jwt.sign({ email: user.email }, process.env.JWT_SECRET || 'super_secret_jwt_key_change_me', { expiresIn: '24h' }) });
   } catch (error: any) {
     console.error('Login Error:', error);
     return res.status(500).json({ error: 'Erreur lors de la connexion.' });
@@ -167,6 +171,31 @@ app.post('/api/backups', authenticateToken, async (req: AuthRequest, res: Respon
     return res.status(500).json({
       error: error.response?.data?.error || error.message || 'Échec de la sauvegarde',
     });
+  }
+});
+
+// 3. Télécharger un fichier de sauvegarde (pour Google Drive)
+app.get('/api/backups/download', authenticateToken, async (req: AuthRequest, res: Response) => {
+  const fileName = req.query.file as string;
+
+  if (!fileName) {
+    return res.status(400).json({ error: 'Nom de fichier manquant.' });
+  }
+
+  try {
+    const goWorkerUrl = process.env.GO_WORKER_URL || 'http://worker-go:8080';
+    
+    // Récupération du contenu binaire auprès du worker Go
+    const response = await axios.get(`${goWorkerUrl}/download?file=${encodeURIComponent(fileName)}`, {
+      responseType: 'arraybuffer',
+    });
+
+    res.setHeader('Content-Type', 'application/sql');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.send(response.data);
+  } catch (error: any) {
+    console.error('Download Error:', error.message);
+    return res.status(404).json({ error: 'Fichier introuvable sur le serveur de sauvegarde.' });
   }
 });
 

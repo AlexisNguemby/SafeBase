@@ -26,6 +26,7 @@ func main() {
 	}
 
 	http.HandleFunc("/backup", handleBackup)
+	http.HandleFunc("/download", handleDownload)
 
 	fmt.Printf("Worker Go running on port %s\n", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
@@ -87,4 +88,35 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		"file":     filename,
 		"filePath": filePath,
 	})
+}
+
+func handleDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	filename := r.URL.Query().Get("file")
+	if filename == "" {
+		http.Error(w, "File query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	storagePath := os.Getenv("STORAGE_PATH")
+	if storagePath == "" {
+		storagePath = "./backups"
+	}
+
+	// Nettoyage du nom pour éviter toute traversée de répertoire (path traversal)
+	cleanFilename := filepath.Base(filename)
+	filePath := filepath.Join(storagePath, cleanFilename)
+
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/sql")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", cleanFilename))
+	http.ServeFile(w, r, filePath)
 }

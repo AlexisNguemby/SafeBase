@@ -14,3 +14,5 @@ docker-compose exec server-node npx prisma migrate dev
 
 # 5. (Optionnel) Générer le client Prisma si besoin
 docker-compose exec server-node npx prisma generate
+<!-- Safebase34@1@
+safebase34gmail.com -->
