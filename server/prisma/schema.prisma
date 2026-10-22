@@ -23,6 +23,7 @@ model BackupHistory {
   status    String
   createdAt DateTime @default(now())
   
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // null pour une sauvegarde planifiée (lancée par le cron, sans utilisateur)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

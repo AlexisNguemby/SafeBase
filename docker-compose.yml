@@ -24,15 +24,15 @@ services:
     container_name: safebase-postgres-client
     restart: always
     environment:
-      POSTGRES_USER: client_user
-      POSTGRES_PASSWORD: client_password
-      POSTGRES_DB: client_db
+      POSTGRES_USER: ${CLIENT_DB_USER:-client_user}
+      POSTGRES_PASSWORD: ${CLIENT_DB_PASSWORD:-client_password}
+      POSTGRES_DB: ${CLIENT_DB_NAME:-client_db}
     ports:
       - "5433:5432"
     volumes:
       - postgres_client_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U client_user -d client_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${CLIENT_DB_USER:-client_user} -d ${CLIENT_DB_NAME:-client_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -48,6 +48,13 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER:-safebase_user}:${POSTGRES_PASSWORD:-safebase_password}@postgres:5432/${POSTGRES_DB:-safebase_db}?schema=public
       GO_WORKER_URL: http://worker-go:8080
+      POSTGRES_USER: ${POSTGRES_USER:-safebase_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-safebase_password}
+      POSTGRES_DB: ${POSTGRES_DB:-safebase_db}
+      CLIENT_DB_USER: ${CLIENT_DB_USER:-client_user}
+      CLIENT_DB_PASSWORD: ${CLIENT_DB_PASSWORD:-client_password}
+      CLIENT_DB_NAME: ${CLIENT_DB_NAME:-client_db}
+      BACKUP_CRON: ${BACKUP_CRON:-}
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_me}
     ports:
       - "3000:3000"
@@ -71,6 +78,7 @@ services:
       PORT: 8080
       DATABASE_URL: postgresql://${POSTGRES_USER:-safebase_user}:${POSTGRES_PASSWORD:-safebase_password}@postgres:5432/${POSTGRES_DB:-safebase_db}?schema=public
       STORAGE_PATH: /app/backups
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-7}
     ports:
       - "8081:8080"
     depends_on:
@@ -92,7 +100,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://localhost:3000
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:3000}
     volumes:
       - ./client:/app
       - /app/node_modules

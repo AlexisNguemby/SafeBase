@@ -1,7 +1,9 @@
-FROM golang:1.22-alpine
+FROM golang:1.22-alpine3.20
 
 # Installation des CLI client SQL pour effectuer les dumps/restaurations
-RUN apk add --no-cache postgresql-client mysql-client gzip
+# Le client Postgres doit avoir la même version majeure que les bases (postgres:15) :
+# un dump fait par pg_dump 17 contient des commandes que Postgres 15 refuse à la restauration
+RUN apk add --no-cache postgresql15-client mysql-client gzip
 
 WORKDIR /app
 

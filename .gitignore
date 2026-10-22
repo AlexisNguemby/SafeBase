@@ -18,6 +18,8 @@ build/
 # Dumps BDD local & Backups
 backups/
 *.sql
+# ...sauf les migrations Prisma, qui doivent être versionnées pour que toute l'équipe ait le même schéma
+!server/prisma/migrations/**/migration.sql
 *.gz
 
 # IDE / Editeurs

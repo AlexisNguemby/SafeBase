@@ -22,6 +22,11 @@ jobs:
           cd server
           npm install
 
+      - name: Run server tests
+        run: |
+          cd server
+          npm test
+
   check-worker-go:
     runs-on: ubuntu-latest
     steps:
@@ -36,6 +41,11 @@ jobs:
         run: |
           cd worker-go
           go build ./...
+
+      - name: Run Worker Go tests
+        run: |
+          cd worker-go
+          go test ./...
 
   check-client-web:
     runs-on: ubuntu-latest
