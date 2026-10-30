@@ -35,3 +35,15 @@ Les sauvegardes planifiées apparaissent dans l'historique de tous les utilisate
 Le bouton « Restaurer » de l'historique rejoue une sauvegarde dans sa base d'origine. Les données actuelles de la base sont remplacées.
 
 La base `safebase_db` n'est pas restaurable depuis l'interface : elle contient les comptes et l'historique de SafeBase lui-même, qu'une restauration effacerait.
+
+## CI/CD
+
+Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main` et sur chaque push sur `main` :
+
+1. **CI** (en parallèle) : tests du serveur (`npm test`), `go vet` + tests du worker, build du client React.
+2. **CD** (si tous les tests passent) : construction des 3 images Docker. Sur une PR, les images sont seulement construites, pour vérifier les Dockerfiles. Sur `main`, elles sont publiées sur GitHub Container Registry :
+   - `ghcr.io/alexisnguemby/safebase-server`
+   - `ghcr.io/alexisnguemby/safebase-worker-go`
+   - `ghcr.io/alexisnguemby/safebase-client`
+
+   Chaque image a deux tags : `latest` et `sha-<commit>` (pour revenir à une version précise).
