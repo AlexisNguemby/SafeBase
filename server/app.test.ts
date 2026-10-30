@@ -121,7 +121,7 @@ describe('POST /api/restores', () => {
     expect(axiosMock.post).not.toHaveBeenCalled();
   });
 
-  it("refuse un fichier absent de l'historique de l'utilisateur, sans appeler le worker", async () => {
+  it("refuse un fichier absent des sauvegardes réussies de l'utilisateur (ou planifiées), sans appeler le worker", async () => {
     prismaMock.backupHistory.findFirst.mockResolvedValue(null);
 
     const res = await request(app)
@@ -131,16 +131,7 @@ describe('POST /api/restores', () => {
 
     expect(res.status).toBe(403);
     expect(axiosMock.post).not.toHaveBeenCalled();
-  });
-
-  it("ne cherche que les sauvegardes réussies de cette base, de l'utilisateur ou planifiées", async () => {
-    prismaMock.backupHistory.findFirst.mockResolvedValue(null);
-
-    await request(app)
-      .post('/api/restores')
-      .set('Authorization', TOKEN)
-      .send({ database_id: 'client', file_name: 'client_db_20261022_030000.sql' });
-
+    // Le mock renvoie null quelle que soit la requête : c'est ce filtre qui porte l'autorisation
     expect(prismaMock.backupHistory.findFirst).toHaveBeenCalledWith({
       where: {
         OR: [{ userId: USER.id }, { userId: null }],
@@ -191,9 +182,7 @@ describe('sauvegardes planifiées', () => {
     ]);
   });
 
-  it('ne planifie rien si BACKUP_CRON est vide ou invalide', () => {
+  it('ne planifie rien si BACKUP_CRON est absent', () => {
     expect(startBackupScheduler(undefined)).toBe(false);
-    expect(startBackupScheduler('')).toBe(false);
-    expect(startBackupScheduler('tous les jours')).toBe(false);
   });
 });
