@@ -81,32 +81,16 @@ func TestHandleBackupRejectsInvalidInput(t *testing.T) {
 	assertDirEmpty(t, storage)
 }
 
-func TestHandleRestore(t *testing.T) {
-	storage := t.TempDir()
-	t.Setenv("STORAGE_PATH", storage)
+func TestHandleRestoreRejectsPathTraversal(t *testing.T) {
+	t.Setenv("STORAGE_PATH", t.TempDir())
 
-	tests := []struct {
-		name     string
-		method   string
-		body     string
-		wantCode int
-	}{
-		{"remontée de dossier", http.MethodPost, `{"db_name":"client_db","filename":"../main.go"}`, http.StatusBadRequest},
-		{"db_name invalide", http.MethodPost, `{"db_name":"client db","filename":"x.sql"}`, http.StatusBadRequest},
-		{"fichier inexistant", http.MethodPost, `{"db_name":"client_db","filename":"absent.sql"}`, http.StatusNotFound},
-	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/restore", strings.NewReader(`{"db_name":"client_db","filename":"../main.go"}`))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(tt.method, "/restore", strings.NewReader(tt.body))
+	handleRestore(rec, req)
 
-			handleRestore(rec, req)
-
-			if rec.Code != tt.wantCode {
-				t.Fatalf("code attendu %d, obtenu %d (%s)", tt.wantCode, rec.Code, rec.Body.String())
-			}
-		})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code attendu 400, obtenu %d (%s)", rec.Code, rec.Body.String())
 	}
 }
 

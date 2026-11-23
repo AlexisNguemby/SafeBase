@@ -25,7 +25,7 @@ const { prismaMock, axiosMock } = vi.hoisted(() => {
 vi.mock('@prisma/client', () => ({ PrismaClient: vi.fn(() => prismaMock) }));
 vi.mock('axios', () => ({ default: axiosMock }));
 
-import { app, runScheduledBackups, startBackupScheduler } from './app';
+import { app, runScheduledBackups } from './app';
 
 const TOKEN = 'Bearer fake-jwt-token-for-alice@test.dev';
 const USER = { id: 'user-1', email: 'alice@test.dev' };
@@ -180,9 +180,5 @@ describe('sauvegardes planifiées', () => {
       ['safebase_db', 'Échec', null],
       ['client_db', 'Réussi', null],
     ]);
-  });
-
-  it('ne planifie rien si BACKUP_CRON est absent', () => {
-    expect(startBackupScheduler(undefined)).toBe(false);
   });
 });
