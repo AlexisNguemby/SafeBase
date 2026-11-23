@@ -5,3 +5,6 @@ prisma/*.db
 .windsurf
 .agents
 skills-lock.json
+# Secrets : ne doivent jamais entrer dans une image publiée
+.env
+.env.*

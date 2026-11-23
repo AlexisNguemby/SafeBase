@@ -1,0 +1,28 @@
+# Dependabot ouvre chaque semaine des PR de mise à jour.
+# cooldown : attend 7 jours après la sortie d'une version npm avant de la proposer,
+# le temps qu'un éventuel paquet malveillant soit détecté et retiré.
+version: 2
+updates:
+  # Met aussi à jour les SHA épinglés dans .github/workflows/ci.yml
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups: { actions: { patterns: ["*"] } }
+
+  - package-ecosystem: npm
+    directories: [ /server, /client ]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups: { npm-minor-patch: { update-types: [ minor, patch ] } }
+
+  - package-ecosystem: gomod
+    directory: /worker-go
+    schedule: { interval: weekly }
+
+  - package-ecosystem: docker
+    directories: [ /server, /worker-go, /client ]
+    schedule: { interval: weekly }
+    ignore:
+      # Alpine 3.23+ ne fournit plus postgresql15-client, indispensable au worker (voir worker-go/Dockerfile)
+      - dependency-name: alpine
+        versions: [ ">=3.23" ]

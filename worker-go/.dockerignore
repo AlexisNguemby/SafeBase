@@ -1,0 +1,7 @@
+# Les dumps contiennent les données des bases : ils ne doivent jamais entrer dans une image
+backups
+*_test.go
+
+# Secrets : ne doivent jamais entrer dans une image publiée
+.env
+.env.*

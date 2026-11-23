@@ -1,0 +1,14 @@
+{
+  // Sert uniquement à la vérification des types (npm run typecheck) :
+  // le code est exécuté directement par tsx, sans étape de compilation.
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["*.ts"]
+}

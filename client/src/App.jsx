@@ -1,37 +1,27 @@
 import { useState, useEffect } from 'react';
 
-// Liste des bases de données cibles configurables
-const PRESET_DATABASES = [
-  {
-    name: 'Production DB (safebase_db)',
-    host: 'postgres',
-    port: 5432,
-    db_name: 'safebase_db',
-    user: 'safebase_user',
-    password: 'safebase_password',
-  },
-  {
-    name: 'Client DB (client_db)',
-    host: 'postgres-client',
-    port: 5432,
-    db_name: 'client_db',
-    user: 'client_user',
-    password: 'client_password',
-  }
-];
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Couleur affichée pour chaque statut de l'historique
+const STATUS_COLORS = {
+  'Réussi': 'green',
+  'Restauré': '#007bff',
+  'Échec': '#dc3545',
+};
 
 function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState(localStorage.getItem('token') || '');
 
-  const [dbConfig, setDbConfig] = useState(PRESET_DATABASES[0]);
+  const [databases, setDatabases] = useState([]);
+  const [selectedDbId, setSelectedDbId] = useState('');
   const [status, setStatus] = useState('');
   const [history, setHistory] = useState([]);
 
   // Récupérer l'historique uniquement si l'utilisateur possède un token
   const fetchHistory = (authToken) => {
-    fetch('http://localhost:3000/api/backups/history', {
+    fetch(`${API_URL}/api/backups/history`, {
       headers: { 
         'Authorization': `Bearer ${authToken}` 
       }
@@ -44,16 +34,37 @@ function App() {
       .catch(() => setHistory([]));
   };
 
+  // Récupérer les bases cibles (le serveur ne renvoie pas les identifiants)
+  const fetchDatabases = (authToken) => {
+    fetch(`${API_URL}/api/databases`, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`
+      }
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Non autorisé');
+        return res.json();
+      })
+      .then((data) => {
+        setDatabases(data);
+        if (data.length > 0) setSelectedDbId(data[0].id);
+      })
+      .catch(() => setDatabases([]));
+  };
+
   useEffect(() => {
     if (token) {
       fetchHistory(token);
+      fetchDatabases(token);
     }
   }, [token]);
+
+  const dbConfig = databases.find((db) => db.id === selectedDbId);
 
   const handleAuth = async (endpoint) => {
     setStatus('Processing authentication...');
     try {
-      const res = await fetch(`http://localhost:3000/api/${endpoint}`, {
+      const res = await fetch(`${API_URL}/api/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -81,6 +92,43 @@ function App() {
     setStatus('Logged out successfully.');
   };
 
+  // Restauration d'une sauvegarde de l'historique dans sa base d'origine
+  const handleRestore = async (item) => {
+    const target = databases.find((db) => db.db_name === item.dbName);
+    if (!target) return;
+
+    // Action destructrice : on demande confirmation avant d'écraser les données
+    const confirmed = window.confirm(
+      `Restaurer ${item.fileName} sur ${target.db_name} ?\nLes données actuelles de la base seront remplacées.`
+    );
+    if (!confirmed) return;
+
+    setStatus(`Restoring ${item.fileName}...`);
+    try {
+      const res = await fetch(`${API_URL}/api/restores`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ database_id: target.id, file_name: item.fileName }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Restore failed');
+
+      setStatus(`Restore successful! ${data.file} restored on ${target.db_name}`);
+      setHistory(data.history);
+    } catch (err) {
+      setStatus(`Error: ${err.message}`);
+    }
+  };
+
+  // Une ligne est restaurable si la sauvegarde a réussi et que sa base l'autorise
+  const isRestorable = (item) =>
+    item.status === 'Réussi' &&
+    databases.some((db) => db.db_name === item.dbName && db.restorable);
+
   // Déclencheur de backup (requiert d'être authentifié)
   const handleBackup = async (shouldOverwrite = false) => {
     if (!token) {
@@ -88,14 +136,19 @@ function App() {
       return;
     }
 
+    if (!dbConfig) {
+      setStatus('Error: No target database selected.');
+      return;
+    }
+
     setStatus(`Triggering backup for ${dbConfig.db_name}...`);
     try {
       const payload = {
-        ...dbConfig,
-        custom_filename: shouldOverwrite ? `${dbConfig.db_name}_latest.sql` : null,
+        database_id: selectedDbId,
+        overwrite: shouldOverwrite,
       };
 
-      const res = await fetch('http://localhost:3000/api/backups', {
+      const res = await fetch(`${API_URL}/api/backups`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -180,19 +233,24 @@ function App() {
                 Sélectionner la base de données cible :
               </label>
               <select 
-                onChange={(e) => setDbConfig(PRESET_DATABASES[e.target.value])}
+                value={selectedDbId}
+                onChange={(e) => setSelectedDbId(e.target.value)}
                 style={{ width: '100%', padding: '8px', fontSize: '14px' }}
               >
-                {PRESET_DATABASES.map((db, index) => (
-                  <option key={index} value={index}>
-                    {db.name} ({db.host}:{db.port})
+                {databases.map((db) => (
+                  <option key={db.id} value={db.id}>
+                    {db.name} ({db.db_name}) ({db.host}:{db.port})
                   </option>
                 ))}
               </select>
             </div>
 
-            <p><strong>Host:</strong> {dbConfig.host}:{dbConfig.port}</p>
-            <p><strong>Database:</strong> {dbConfig.db_name}</p>
+            {dbConfig && (
+              <>
+                <p><strong>Host:</strong> {dbConfig.host}:{dbConfig.port}</p>
+                <p><strong>Database:</strong> {dbConfig.db_name}</p>
+              </>
+            )}
             
             <div style={{ display: 'flex', gap: '10px' }}>
               <button 
@@ -206,7 +264,7 @@ function App() {
                 onClick={() => handleBackup(true)} 
                 style={{ padding: '10px 15px', background: '#28a745', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
               >
-                Sauvegarder et Écraser ({dbConfig.db_name}_latest.sql)
+                Sauvegarder et Écraser ({dbConfig?.db_name}_latest.sql)
               </button>
             </div>
           </div>
@@ -224,15 +282,30 @@ function App() {
                     <th style={{ padding: '8px' }}>Fichier SQL</th>
                     <th style={{ padding: '8px' }}>Date</th>
                     <th style={{ padding: '8px' }}>Statut</th>
+                    <th style={{ padding: '8px' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.map((item, index) => (
                     <tr key={index} style={{ borderBottom: '1px solid #eee' }}>
                       <td style={{ padding: '8px' }}>{item.dbName}</td>
-                      <td style={{ padding: '8px' }}><code>{item.fileName}</code></td>
+                      <td style={{ padding: '8px' }}>
+                        <code>{item.fileName}</code>
+                        {/* userId null = sauvegarde lancée par la planification */}
+                        {item.userId === null && <em style={{ color: '#666' }}> (auto)</em>}
+                      </td>
                       <td style={{ padding: '8px' }}>{item.date}</td>
-                      <td style={{ padding: '8px', color: 'green', fontWeight: 'bold' }}>{item.status}</td>
+                      <td style={{ padding: '8px', color: STATUS_COLORS[item.status] || 'inherit', fontWeight: 'bold' }}>{item.status}</td>
+                      <td style={{ padding: '8px' }}>
+                        {isRestorable(item) && (
+                          <button
+                            onClick={() => handleRestore(item)}
+                            style={{ padding: '4px 8px', background: '#ffc107', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                          >
+                            Restaurer
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
