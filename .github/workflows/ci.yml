@@ -1,8 +1,10 @@
-name: SafeBase CI Pipeline
+name: SafeBase CI/CD
 
 on:
   push:
     branches: [ "main" ]
+    # Une release se fait en poussant un tag : git tag v1.0.0 && git push origin v1.0.0
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -11,76 +13,180 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  check-server-node:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+# Jeton GitHub en lecture seule par défaut ; les droits en plus sont donnés job par job
+permissions:
+  contents: read
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+# Les actions sont épinglées par SHA de commit (le commentaire donne la version) :
+# un tag comme "v7" peut être déplacé vers du code malveillant, un SHA non.
+# Dependabot (.github/dependabot.yml) met ces SHA à jour.
+
+jobs:
+  server:
+    name: server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: server/package-lock.json
 
-      # npm ci : installation exacte depuis le lockfile, plus rapide que npm install
-      - name: Install dependencies
-        run: |
-          cd server
-          npm ci
+      - run: npm ci
 
-      - name: Run server tests
-        run: |
-          cd server
-          npm test
+      # tsx et vitest ignorent les types : sans cette étape, une erreur de type passe la CI
+      - name: Typecheck
+        run: npm run typecheck
 
-  check-worker-go:
+      - name: Tests
+        run: npm test
+
+  # Les migrations Prisma s'appliquent-elles sur une base vide, et correspondent-elles au schéma ?
+  prisma:
+    name: prisma
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: safebase_user
+          POSTGRES_PASSWORD: safebase_password
+          POSTGRES_DB: safebase_db
+        ports: [ "5432:5432" ]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://safebase_user:safebase_password@localhost:5432/safebase_db
+      SHADOW_DATABASE_URL: postgresql://safebase_user:safebase_password@localhost:5432/safebase_shadow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Pas de go.sum (aucune dépendance) : rien à mettre en cache
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          go-version: '1.23'
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - run: npx prisma validate
+
+      - name: Appliquer les migrations sur une base vide
+        run: npx prisma migrate deploy
+
+      # Échoue (code 2) si schema.prisma a été modifié sans créer de migration
+      - name: Schéma et migrations synchronisés
+        run: |
+          psql "$DATABASE_URL" -c 'CREATE DATABASE safebase_shadow'
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" \
+            --exit-code
+
+  worker-go:
+    name: worker-go
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker-go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Même version de Go que celle déclarée dans go.mod (pas de go.sum : rien à mettre en cache)
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: worker-go/go.mod
           cache: false
 
-      - name: Vet Worker Go
-        run: |
-          cd worker-go
-          go vet ./...
+      - run: go vet ./...
 
       # go test compile déjà le paquet : pas besoin d'un go build séparé
-      - name: Run Worker Go tests
-        run: |
-          cd worker-go
-          go test ./...
+      - run: go test ./...
 
-  check-client-web:
+      # Ne signale que les failles réellement atteintes par le code (bibliothèque standard comprise)
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Le test qui compte le plus : une vraie sauvegarde (pg_dump) suivie d'une vraie restauration (psql)
+  integration:
+    name: integration
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: client_user
+          POSTGRES_PASSWORD: client_password
+          POSTGRES_DB: client_db
+        ports: [ "5432:5432" ]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          node-version: '20'
+          go-version-file: worker-go/go.mod
+          cache: false
+
+      # Le runner fournit un client Postgres plus récent (16 ou 18) : on installe la version 15,
+      # la même que dans l'image du worker et que les bases
+      - name: Installer le client PostgreSQL 15
+        run: |
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-15
+          echo "/usr/lib/postgresql/15/bin" >> "$GITHUB_PATH"
+
+      - name: Vérifier la version de pg_dump
+        run: pg_dump --version | grep -q ' 15\.' || { pg_dump --version; exit 1; }
+
+      - name: Sauvegarde puis restauration
+        working-directory: worker-go
+        run: go test -tags=integration -run Integration -v ./...
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: client_user
+          PGPASSWORD: client_password
+          PGDATABASE: client_db
+
+  client:
+    name: client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      - name: Install dependencies & Build React
-        run: |
-          cd client
-          npm ci
-          npm run build --if-present
+      - run: npm ci
 
-  # CD : construit les 3 images Docker une fois tous les tests passés.
-  # Sur une PR : construction seule (vérifie que les Dockerfiles fonctionnent).
-  # Sur main : construction + publication sur GitHub Container Registry (ghcr.io).
+      # Détecte les erreurs de syntaxe et les imports cassés
+      - run: npm run build
+
+  # CD : construit les 3 images de production une fois toutes les vérifications passées.
+  # - PR : construction seule (vérifie que les Dockerfiles fonctionnent)
+  # - push sur main : publication avec les tags "latest" et "sha-xxxxxxx"
+  # - tag v1.2.3 : publication avec les tags "1.2.3" et "1.2"
   docker-images:
-    needs: [ check-server-node, check-worker-go, check-client-web ]
+    name: docker-images (${{ matrix.service }})
+    needs: [ server, prisma, worker-go, integration, client ]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,38 +194,72 @@ jobs:
     strategy:
       matrix:
         service: [ server, worker-go, client ]
-    env:
-      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to GitHub Container Registry
-        if: env.PUBLISH == 'true'
-        uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tags : "latest" + le SHA du commit (permet de revenir à une version précise)
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}-${{ matrix.service }}
           tags: |
-            type=raw,value=latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./${{ matrix.service }}
-          push: ${{ env.PUBLISH == 'true' }}
+          push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Utilisé seulement par le client : URL de l'API vue par le navigateur (variable du dépôt)
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL || 'http://localhost:3000' }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # Déploiement sur un serveur par SSH, uniquement pour un tag v*.
+  # Ne s'exécute que si la variable DEPLOY_HOST est définie (Settings > Secrets and variables > Actions).
+  deploy:
+    name: deploy
+    needs: docker-images
+    if: startsWith(github.ref, 'refs/tags/v') && vars.DEPLOY_HOST != ''
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # known_hosts stocké en secret : on vérifie l'identité du serveur au lieu de lui faire confiance aveuglément
+      - name: Configurer SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+
+      # Le serveur télécharge les images testées par la CI, il ne construit rien.
+      # Les secrets de l'application sont dans ~/safebase/.env sur le serveur, pas dans GitHub.
+      - name: Déployer
+        env:
+          TARGET: ${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          TAG="${VERSION#v}"
+          scp docker-compose.prod.yml "$TARGET:safebase/docker-compose.prod.yml"
+          ssh "$TARGET" "cd safebase && export TAG=$TAG && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d"

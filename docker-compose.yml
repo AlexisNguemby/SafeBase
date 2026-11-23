@@ -42,6 +42,8 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      # Étape "dev" du Dockerfile : rechargement à chaud (la dernière étape, "prod", sert aux images publiées)
+      target: dev
     container_name: safebase-node-server
     restart: always
     environment:
@@ -86,8 +88,9 @@ services:
         condition: service_healthy
       postgres-client:
         condition: service_healthy
+    # Pas de code monté ici : le worker tourne avec la même image qu'en prod (pg_dump 15).
+    # Après une modification du code Go : docker compose up --build worker-go
     volumes:
-      - ./worker-go:/app
       - ./worker-go/backups:/app/backups
 
   # Frontend React + Vite
@@ -95,6 +98,7 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
+      target: dev
     container_name: safebase-web-client
     restart: always
     ports:

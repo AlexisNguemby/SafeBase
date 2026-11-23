@@ -36,3 +36,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Recherches et rapports générés par Claude Code (locaux, non versionnés)
+research_notes/
+reports/

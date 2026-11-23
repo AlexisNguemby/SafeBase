@@ -1,0 +1,92 @@
+# Production : lance les images publiées par la CI sur ghcr.io (aucune construction, aucun code monté).
+#
+#   TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+#
+# Retour arrière : relancer la même commande avec la version précédente (ex. TAG=0.9.0).
+# Ne jamais utiliser "latest" : on doit toujours savoir quelle version tourne.
+#
+# Les secrets viennent d'un fichier .env posé à côté de ce fichier sur le serveur (chmod 600).
+# La syntaxe ${VAR:?message} fait refuser le démarrage si une variable manque,
+# au lieu de lancer l'application avec un mot de passe connu de tous.
+# IMAGE_PREFIX (optionnel) permet de pointer vers un autre registre ou un fork.
+
+services:
+  # Pas de "ports" sur les bases : elles ne sont joignables que par les autres conteneurs
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER manquant dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB manquant dans .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-client:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${CLIENT_DB_USER:?CLIENT_DB_USER manquant dans .env}
+      POSTGRES_PASSWORD: ${CLIENT_DB_PASSWORD:?CLIENT_DB_PASSWORD manquant dans .env}
+      POSTGRES_DB: ${CLIENT_DB_NAME:?CLIENT_DB_NAME manquant dans .env}
+    volumes:
+      - postgres_client_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server-node:
+    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-server:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    restart: always
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      GO_WORKER_URL: http://worker-go:8080
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      CLIENT_DB_USER: ${CLIENT_DB_USER}
+      CLIENT_DB_PASSWORD: ${CLIENT_DB_PASSWORD}
+      CLIENT_DB_NAME: ${CLIENT_DB_NAME}
+      BACKUP_CRON: ${BACKUP_CRON:-}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET manquant dans .env}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-client:
+        condition: service_healthy
+
+  # Pas de "ports" : seul le serveur Node appelle le worker
+  worker-go:
+    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-worker-go:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    restart: always
+    environment:
+      PORT: 8080
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-7}
+    volumes:
+      - backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-client:
+        condition: service_healthy
+
+  client-web:
+    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-client:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    restart: always
+    ports:
+      - "80:80"
+
+volumes:
+  postgres_data:
+  postgres_client_data:
+  backups:

@@ -38,12 +38,52 @@ La base `safebase_db` n'est pas restaurable depuis l'interface : elle contient l
 
 ## CI/CD
 
-Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main` et sur chaque push sur `main` :
+Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main`, sur chaque push sur `main` et sur chaque tag `v*` :
 
-1. **CI** (en parallèle) : tests du serveur (`npm test`), `go vet` + tests du worker, build du client React.
-2. **CD** (si tous les tests passent) : construction des 3 images Docker. Sur une PR, les images sont seulement construites, pour vérifier les Dockerfiles. Sur `main`, elles sont publiées sur GitHub Container Registry :
+1. **CI** (en parallèle) :
+   - `server` : vérification des types (`npm run typecheck`) et tests (`npm test`)
+   - `prisma` : les migrations s'appliquent sur un Postgres 15 vide et correspondent à `schema.prisma`
+   - `worker-go` : `go vet`, tests, `govulncheck` (failles connues)
+   - `integration` : vraie sauvegarde (`pg_dump` 15) puis vraie restauration (`psql`) sur Postgres 15
+   - `client` : build du client React
+2. **CD** (si tout passe) : construction des 3 images de production (étape `prod` des Dockerfiles). Sur une PR, elles sont seulement construites. Sinon, elles sont publiées sur GitHub Container Registry :
    - `ghcr.io/alexisnguemby/safebase-server`
    - `ghcr.io/alexisnguemby/safebase-worker-go`
    - `ghcr.io/alexisnguemby/safebase-client`
 
-   Chaque image a deux tags : `latest` et `sha-<commit>` (pour revenir à une version précise).
+   | Événement | Tags publiés |
+   |---|---|
+   | push sur `main` | `latest`, `sha-<commit>` |
+   | tag `v1.2.3` | `1.2.3`, `1.2`, `sha-<commit>` |
+3. **Déploiement** (tag `v*` uniquement, si la variable `DEPLOY_HOST` est définie) : copie `docker-compose.prod.yml` sur le serveur par SSH puis lance `docker compose pull && up -d` avec la version du tag.
+
+Lancer le test d'intégration en local (Postgres 15 et client 15 requis) :
+
+```bash
+cd worker-go
+PGHOST=localhost PGUSER=client_user PGPASSWORD=client_password PGDATABASE=client_db \
+  go test -tags=integration -run Integration -v ./...
+```
+
+### Faire une release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Mettre en place le déploiement (une seule fois)
+
+Sur le serveur : installer Docker, créer `~/safebase/.env` (mêmes variables que `.env.example`, avec de vrais secrets, `chmod 600`), et si les images sont privées, `docker login ghcr.io`.
+
+Dans GitHub (Settings > Secrets and variables > Actions) :
+
+| Type | Nom | Valeur |
+|---|---|---|
+| Variable | `DEPLOY_HOST` | adresse du serveur |
+| Variable | `DEPLOY_USER` | utilisateur SSH |
+| Variable | `VITE_API_URL` | URL publique de l'API (ex. `https://api.exemple.fr`) |
+| Secret | `DEPLOY_SSH_KEY` | clé privée SSH dédiée au déploiement |
+| Secret | `DEPLOY_KNOWN_HOSTS` | sortie de `ssh-keyscan <serveur>` |
+
+Retour arrière : sur le serveur, `cd ~/safebase && TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d` avec la version précédente. Attention : les migrations Prisma ne reviennent pas en arrière, seules les images changent.
